@@ -45,10 +45,14 @@ supported_colors = {
 }
 
 
-async def deleteSession(workList, uid):
+async def deleteSessionDelay(workList, uid):
     s = workList.get(uid, "")
     if s:
         await asyncio.sleep(15)
+        del workList[uid]
+async def deleteSession(workList, uid):
+    s = workList.get(uid, "")
+    if s:
         del workList[uid]
 
 async def loginPhone(chromium_path, workList, uid, headless):
@@ -117,18 +121,18 @@ async def loginPhone(chromium_path, workList, uid, headless):
             ),
         }
     )
-    page = await browser.newPage()
-    await page.setViewport({"width": 360, "height": 640})
-    await page.goto(
-        "https://plogin.m.jd.com/login/login"
-    )
-    await typephoneuser(page, usernum)
+    try:
+        page = await browser.newPage()
+        await page.setViewport({"width": 360, "height": 640})
+        await page.goto(
+            "https://plogin.m.jd.com/login/login"
+        )
+        await typephoneuser(page, usernum)
 
-    IN_SMS_TIMES = 0
-    start_time = datetime.datetime.now()
-    sms_sent = False
-    while True:
-        try:
+        IN_SMS_TIMES = 0
+        start_time = datetime.datetime.now()
+        sms_sent = False
+        while True:
             now_time = datetime.datetime.now()
             print("循环检测中...")
             if (now_time - start_time).total_seconds() > 70:
@@ -198,12 +202,14 @@ async def loginPhone(chromium_path, workList, uid, headless):
                     break
 
             await asyncio.sleep(1)
-        except Exception as e:
-            print("异常退出")
-            print(e)
-            await browser.close()
-            await deleteSession(workList, uid)
-            raise e
+    except Exception as e:
+        workList[uid].msg = "服务器异常退出"
+        workList[uid].status = "error"
+        print("异常退出")
+        print(e)
+        await browser.close()
+        await deleteSessionDelay(workList, uid)
+        raise e
 
     print("任务完成退出")
     await browser.close()
@@ -288,18 +294,18 @@ async def loginPassword(chromium_path, workList, uid, headless):
             ),
         }
     )
-    page = await browser.newPage()
-    await page.setViewport({"width": 360, "height": 640})
-    await page.goto(
-        "https://plogin.m.jd.com/login/login?appid=300&returnurl=https%3A%2F%2Fm.jd.com%2F&source=wq_passport"
-    )
-    await typeuser(page, usernum, passwd)
+    try:
+        page = await browser.newPage()
+        await page.setViewport({"width": 360, "height": 640})
+        await page.goto(
+            "https://plogin.m.jd.com/login/login"
+        )
+        await typeuser(page, usernum, passwd)
 
-    IN_SMS_TIMES = 0
-    start_time = datetime.datetime.now()
+        IN_SMS_TIMES = 0
+        start_time = datetime.datetime.now()
 
-    while True:
-        try:
+        while True:
             now_time = datetime.datetime.now()
             print("循环检测中...")
             if (now_time - start_time).total_seconds() > 70:
@@ -335,9 +341,15 @@ async def loginPassword(chromium_path, workList, uid, headless):
                     workList[uid].status = "pending"
                     workList[uid].msg = "正在过形状、颜色检测"
                     if await verification_shape(page) == "notSupport":
-	                    print("即将重启浏览器重试")
-	                    await browser.close()
-	                    return "notSupport"
+                        print("即将重启浏览器重试")
+                        await browser.close()
+                        return "notSupport"
+                    await page.waitFor(3000)
+            elif await page.querySelector('.dialog'):
+                print("进入弹出对话框分支")
+                workList[uid].status = "error"
+                workList[uid].msg = "账号异常，自行检查"
+                break
             if not sms_sent:
 
                 if await page.J(".sub-title"):
@@ -395,12 +407,12 @@ async def loginPassword(chromium_path, workList, uid, headless):
                     break
 
             await asyncio.sleep(1)
-        except Exception as e:
-            print("异常退出")
-            print(e)
-            await browser.close()
-            await deleteSession(workList, uid)
-            raise e
+    except Exception as e:
+        print("异常退出")
+        print(e)
+        await browser.close()
+        await deleteSessionDelay(workList, uid)
+        raise e
         
     print("任务完成退出")
 
@@ -793,7 +805,17 @@ async def verification_shape(page):
         word = get_word(ocr, "rgb_word_img.png")
 
         button = await page.querySelector("div.captcha_footer button.sure_btn")
+        if button is None:
+            button = await page.querySelector(".sure_btn")
+        if button is None:
+            print("未找到提交按钮")
+            raise "未找到提交按钮"
         refresh_button = await page.querySelector("div.captcha_header img.jcap_refresh")
+        if refresh_button is None:
+            refresh_button = await page.querySelector("div.captcha_header span.jcap_refresh")
+        if refresh_button is None:
+            refresh_button = await page.querySelector(".jcap_refresh")
+
 
         if word.find("色") > 0:
             target_color = word.split("请选出图中")[1].split("的图形")[0]
@@ -804,6 +826,9 @@ async def verification_shape(page):
                 )
                 if center_x is None and center_y is None:
                     print("识别失败，刷新")
+                    if refresh_button is None:
+                        print("未找到刷新按钮")
+                        raise "未找到刷新按钮"
                     await refresh_button.click()
                     await asyncio.sleep(random.uniform(2, 4))
                     continue
@@ -815,6 +840,9 @@ async def verification_shape(page):
                 break
             else:
                 print(f"不支持{target_color}，重试")
+                if refresh_button is None:
+                    print("未找到刷新按钮")
+                    raise "未找到刷新按钮"
                 await refresh_button.click()
                 await asyncio.sleep(random.uniform(2, 4))
                 break
@@ -848,6 +876,9 @@ async def verification_shape(page):
             for wd in target_word:
                 if wd not in img_xy:
                     print(f"\"{wd}\"未找到，识别失败,刷新")
+                    if refresh_button is None:
+                        print("未找到刷新按钮")
+                        raise "未找到刷新按钮"
                     await refresh_button.click()
                     await asyncio.sleep(random.uniform(2, 4))
                     not_found = True
@@ -879,6 +910,9 @@ async def verification_shape(page):
                 )
                 if center_x is None and center_y is None:
                     print(f"识别失败,刷新")
+                    if refresh_button is None:
+                        print("未找到刷新按钮")
+                        raise "未找到刷新按钮"
                     await refresh_button.click()
                     await asyncio.sleep(random.uniform(2, 4))
                     continue
@@ -890,6 +924,9 @@ async def verification_shape(page):
                 break
             else:
                 print(f"不支持{shape_type},刷新中......")
+                if refresh_button is None:
+                    print("未找到刷新按钮")
+                    raise "未找到刷新按钮"
                 await refresh_button.click()
                 await asyncio.sleep(random.uniform(2, 4))
                 continue
@@ -1010,6 +1047,7 @@ async def main(workList, uid, oocr, oocrDet):
     print("判断初始化浏览器")
     chromium_path = await init_chrome()
     headless = 'new'
+    #headless = False
     print("选择登录")
     
     try_time = 1
@@ -1035,6 +1073,6 @@ async def main(workList, uid, oocr, oocrDet):
         os.remove("rgba_word_img.png")
     if os.path.exists("rgb_word_img.png"):
         os.remove("rgb_word_img.png")
-    await deleteSession(workList, uid)
+    await deleteSessionDelay(workList, uid)
     print("登录完成")
     await asyncio.sleep(10)
